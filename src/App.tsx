@@ -52,6 +52,14 @@ import { VoiceControlConsole } from './components/VoiceControlConsole';
 import { LiveCaptionsStage } from './components/LiveCaptionsStage';
 import { ChatStream } from './components/ChatStream';
 import { PromptInputBar } from './components/PromptInputBar';
+import { ExportSessionModal } from './components/ExportSessionModal';
+import {
+  ExportSessionPayload,
+  generateSessionJson,
+  generateSessionText,
+  buildExportFilename,
+  downloadFileLocally,
+} from './utils/exportSession';
 
 export default function App() {
   // Auth state
@@ -105,6 +113,8 @@ export default function App() {
   const [isDriveModalOpen, setIsDriveModalOpen] = useState<boolean>(false);
   const [isQuotaModalOpen, setIsQuotaModalOpen] = useState<boolean>(false);
   const [isRecallModalOpen, setIsRecallModalOpen] = useState<boolean>(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
+  const [sessionToExport, setSessionToExport] = useState<ExportSessionPayload | null>(null);
 
   // Audio & Hardware routing
   const [speakerState, setSpeakerState] = useState<'idle' | 'speaking' | 'synthesizing' | 'listening'>('idle');
@@ -793,6 +803,81 @@ ${rawPrompt}`;
     }
   };
 
+  const getCurrentSessionPayload = (): ExportSessionPayload => {
+    const activePersona = personas[activePersonaId] || personas.sheikh_gemini;
+    return {
+      sessionId: currentSessionId,
+      title: sessionTitle,
+      versionTag: sessionVersionTag,
+      createdAt: sessionCreatedAt,
+      updatedAt: new Date().toISOString(),
+      personaTitle: activePersona.title,
+      personaDomain: activePersona.domain,
+      llmModel: preferredModel,
+      voiceName,
+      voiceState,
+      strictMonad,
+      tokenSummary: {
+        totalPrompt: telemetry.sessionPromptTokens,
+        totalOutput: telemetry.sessionCandidateTokens,
+        totalThinking: telemetry.sessionThinkingTokens,
+      },
+      boundDriveFiles: boundDriveFiles.map(b => ({
+        id: b.id,
+        name: b.name,
+        mimeType: b.mimeType,
+        slot: b.slot,
+      })),
+      turns,
+    };
+  };
+
+  const handleOpenExportCurrent = () => {
+    if (turns.length === 0) {
+      showToast('⚠️ لا توجد رسائل مسجلة في الجلسة الحالية بعد لتصديرها.', 'warning');
+      return;
+    }
+    setSessionToExport(getCurrentSessionPayload());
+    setIsExportModalOpen(true);
+  };
+
+  const handleOpenExportSavedSession = (saved: SavedSession) => {
+    const payload: ExportSessionPayload = {
+      sessionId: saved.sessionId,
+      title: saved.title,
+      versionTag: saved.versionTag,
+      createdAt: saved.createdAt,
+      updatedAt: saved.updatedAt,
+      llmModel: saved.llmModel,
+      voiceName: saved.voiceName,
+      voiceState: saved.voiceState,
+      tokenSummary: saved.tokenSummary,
+      boundDriveFiles: saved.boundDriveFiles,
+      turns: saved.turns || [],
+    };
+    setSessionToExport(payload);
+    setIsExportModalOpen(true);
+  };
+
+  const handleQuickExport = (format: 'json' | 'txt' = 'json') => {
+    if (turns.length === 0) {
+      showToast('⚠️ لا توجد رسائل لتصديرها في الجلسة الحالية.', 'warning');
+      return;
+    }
+    const payload = getCurrentSessionPayload();
+    const content = format === 'json' ? generateSessionJson(payload) : generateSessionText(payload);
+    const filename = buildExportFilename(payload.title, payload.versionTag, format);
+    const mime = format === 'json' ? 'application/json' : 'text/plain';
+    const success = downloadFileLocally(content, filename, mime);
+    if (success) {
+      showToast(`💾 تم تنزيل سجل الجلسة (${filename}) محلياً بنجاح!`, 'success');
+    } else {
+      showToast('تعذر التنزيل المباشر، جاري فتح نافذة التصدير.', 'info');
+      setSessionToExport(payload);
+      setIsExportModalOpen(true);
+    }
+  };
+
   const handleResumeSession = (session: SavedSession) => {
     setSessionTitle(session.title);
     setCurrentSessionId(`sess_${Date.now()}`);
@@ -903,6 +988,7 @@ ${rawPrompt}`;
           isLoggingIn={isLoggingIn}
           onOpenRecallModal={() => setIsRecallModalOpen(true)}
           onEndSession={handleEndSession}
+          onOpenExportModal={handleOpenExportCurrent}
           onOpenDriveModal={() => setIsDriveModalOpen(true)}
           onOpenQuotaModal={() => setIsQuotaModalOpen(true)}
           onTogglePersonaDrawer={() => setIsPersonaDrawerOpen(!isPersonaDrawerOpen)}
@@ -1049,6 +1135,7 @@ ${rawPrompt}`;
                 setCurrentSessionId(`sess_${Date.now()}`);
                 showToast(`➕ تم فتح جلسة جديدة (${nextVer})!`);
               }}
+              onOpenExportModal={handleOpenExportCurrent}
               q10Status={q10Status}
               boundDriveFiles={boundDriveFiles}
               onUnbindDriveItem={handleUnbindDriveItem}
@@ -1241,6 +1328,7 @@ ${rawPrompt}`;
                 setCurrentSessionId(`sess_${Date.now()}`);
                 showToast(`➕ تم فتح جلسة جديدة بترميز لاحق (${nextVer})!`);
               }}
+              onOpenExportModal={handleOpenExportCurrent}
               q10Status={q10Status}
               boundDriveFiles={boundDriveFiles}
               onUnbindDriveItem={handleUnbindDriveItem}
@@ -1250,6 +1338,60 @@ ${rawPrompt}`;
 
           {/* Right Column: Live Captions & Conversation Stream */}
           <div className="col-span-1 lg:col-span-8 rounded-2xl p-3 md:p-4 bg-slate-900/90 backdrop-blur-md border border-slate-800 flex flex-col h-[520px] sm:h-[560px] lg:h-[600px] shadow-2xl">
+            {/* Active Session & Local Export Toolbar */}
+            <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-slate-800 text-xs flex-wrap shrink-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm">💬</span>
+                <input
+                  type="text"
+                  value={sessionTitle}
+                  onChange={e => setSessionTitle(e.target.value)}
+                  className="bg-slate-950/80 px-2.5 py-1 rounded-xl border border-slate-800 hover:border-slate-700 focus:border-cyan-500 text-slate-200 font-bold text-xs max-w-[190px] sm:max-w-[240px] truncate focus:outline-none"
+                  title="اضغط لتعديل اسم الجلسة قبل التصدير أو الحفظ"
+                  placeholder="عنوان الجلسة..."
+                />
+                <span className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950 text-indigo-300 border border-indigo-700/50 font-mono font-bold">
+                  {sessionVersionTag}
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 font-mono">
+                  {turns.length} أدوار
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handleOpenExportCurrent}
+                  className="px-2.5 py-1 rounded-xl bg-gradient-to-r from-emerald-600/40 via-teal-600/40 to-cyan-600/40 hover:from-emerald-600/60 hover:to-cyan-600/60 border border-emerald-400/50 text-emerald-200 text-xs font-bold transition flex items-center gap-1 shadow"
+                  title="تصدير سجل المحادثة كملف JSON أو نصي TXT أو Markdown محلياً خارج Firestore"
+                >
+                  <span>💾 تصدير محلي</span>
+                </button>
+
+                <div className="flex items-center rounded-lg bg-slate-950 border border-slate-800 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => handleQuickExport('json')}
+                    disabled={turns.length === 0}
+                    className="px-2 py-0.5 rounded text-[11px] font-mono text-emerald-400 hover:text-emerald-300 hover:bg-slate-800 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="تنزيل مباشر بصيغة JSON"
+                  >
+                    .json
+                  </button>
+                  <span className="text-slate-700 text-[10px]">|</span>
+                  <button
+                    type="button"
+                    onClick={() => handleQuickExport('txt')}
+                    disabled={turns.length === 0}
+                    className="px-2 py-0.5 rounded text-[11px] font-mono text-cyan-400 hover:text-cyan-300 hover:bg-slate-800 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="تنزيل مباشر بصيغة TXT"
+                  >
+                    .txt
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* Live Captions Stage */}
             <LiveCaptionsStage
               userTranscript={userTranscript}
@@ -1314,7 +1456,15 @@ ${rawPrompt}`;
         onResumeSession={handleResumeSession}
         onInjectMemory={handleInjectSessionMemory}
         onDeleteSession={handleDeleteSession}
+        onExportSession={handleOpenExportSavedSession}
         injectedSessionIds={injectedSessionIds}
+      />
+
+      <ExportSessionModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        sessionData={sessionToExport}
+        onNotify={(msg, type) => showToast(msg, type)}
       />
     </div>
   );

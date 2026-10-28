@@ -13,6 +13,7 @@ interface HeaderProps {
   isLoggingIn: boolean;
   onOpenRecallModal: () => void;
   onEndSession: () => void;
+  onOpenExportModal?: () => void;
   onOpenDriveModal: () => void;
   onOpenQuotaModal: () => void;
   onTogglePersonaDrawer: () => void;
@@ -27,6 +28,7 @@ export const Header: React.FC<HeaderProps> = ({
   isLoggingIn,
   onOpenRecallModal,
   onEndSession,
+  onOpenExportModal,
   onOpenDriveModal,
   onOpenQuotaModal,
   onTogglePersonaDrawer,
@@ -97,6 +99,16 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <span>🛑 إنهاء</span>
         </button>
+
+        {onOpenExportModal && (
+          <button
+            onClick={onOpenExportModal}
+            className="px-2.5 py-1.5 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-400/50 text-emerald-200 text-xs font-bold transition flex items-center gap-1 shadow"
+            title="تصدير سجل المحادثة كملف JSON أو نصي TXT أو Markdown محلياً"
+          >
+            <span>💾 تصدير محلي</span>
+          </button>
+        )}
 
         <button
           onClick={onOpenDriveModal}

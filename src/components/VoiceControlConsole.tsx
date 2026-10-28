@@ -22,6 +22,7 @@ interface VoiceControlConsoleProps {
   audioMeterLevel: number;
   onStopAudioPlayback: () => void;
   onNewSessionVersion: () => void;
+  onOpenExportModal?: () => void;
   q10Status: Record<string, boolean>;
   boundDriveFiles: DriveItem[];
   onUnbindDriveItem: (id: string) => void;
@@ -44,6 +45,7 @@ export const VoiceControlConsole: React.FC<VoiceControlConsoleProps> = ({
   audioMeterLevel,
   onStopAudioPlayback,
   onNewSessionVersion,
+  onOpenExportModal,
   q10Status,
   boundDriveFiles,
   onUnbindDriveItem,
@@ -154,18 +156,29 @@ export const VoiceControlConsole: React.FC<VoiceControlConsoleProps> = ({
         </div>
 
         {/* Bottom Actions */}
-        <div className="w-full flex gap-2 pt-1">
+        <div className="w-full flex gap-1.5 pt-1">
           <button
             onClick={onStopAudioPlayback}
-            className="w-1/2 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-semibold transition"
+            className="flex-1 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 text-[11px] font-semibold transition"
+            title="إيقاف تشغيل الصوت الحالي"
           >
-            🔇 إيقاف الصوت
+            🔇 إيقاف
           </button>
+          {onOpenExportModal && (
+            <button
+              onClick={onOpenExportModal}
+              className="flex-1 py-2 rounded-xl bg-cyan-950/70 hover:bg-cyan-900 border border-cyan-600/50 text-cyan-200 text-[11px] font-semibold transition flex items-center justify-center gap-1"
+              title="تصدير سجل المحادثة كملف JSON أو TXT محلياً"
+            >
+              <span>💾 تصدير</span>
+            </button>
+          )}
           <button
             onClick={onNewSessionVersion}
-            className="w-1/2 py-2 rounded-xl bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-700/50 text-emerald-200 text-xs font-semibold transition"
+            className="flex-1 py-2 rounded-xl bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-700/50 text-emerald-200 text-[11px] font-semibold transition flex items-center justify-center gap-1"
+            title="بدء جلسة جديدة بنسخة متتالية v+1"
           >
-            ➕ جلسة جديدة (v+1)
+            <span>➕ جديدة</span>
           </button>
         </div>
       </div>

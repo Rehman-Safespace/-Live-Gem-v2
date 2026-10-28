@@ -13,6 +13,7 @@ interface RecallSessionModalProps {
   onResumeSession: (session: SavedSession) => void;
   onInjectMemory: (session: SavedSession) => void;
   onDeleteSession: (sessionId: string) => void;
+  onExportSession?: (session: SavedSession) => void;
   injectedSessionIds: Set<string>;
 }
 
@@ -23,6 +24,7 @@ export const RecallSessionModal: React.FC<RecallSessionModalProps> = ({
   onResumeSession,
   onInjectMemory,
   onDeleteSession,
+  onExportSession,
   injectedSessionIds,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -130,6 +132,15 @@ export const RecallSessionModal: React.FC<RecallSessionModalProps> = ({
                     >
                       {isInjected ? '✓ مدمجة في الذاكرة الحية' : '🧠 حقن كذاكرة حية في الجلسة'}
                     </button>
+                    {onExportSession && (
+                      <button
+                        onClick={() => onExportSession(sess)}
+                        className="py-1.5 px-3 rounded-xl bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-600/60 text-emerald-200 text-xs font-bold transition flex items-center gap-1 shadow"
+                        title="تصدير هذه الجلسة محلياً بصيغة JSON أو TXT"
+                      >
+                        <span>💾 تصدير محلي</span>
+                      </button>
+                    )}
                     <button
                       onClick={() => onDeleteSession(sess.sessionId)}
                       className="px-2.5 py-1.5 rounded-xl bg-rose-950/80 hover:bg-rose-900 border border-rose-600 text-rose-300 text-xs font-bold"
