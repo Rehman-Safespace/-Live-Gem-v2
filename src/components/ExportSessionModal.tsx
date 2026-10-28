@@ -13,11 +13,14 @@ import {
   downloadFileLocally,
 } from '../utils/exportSession';
 
+import { createDriveFile } from '../lib/drive';
+
 interface ExportSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
   sessionData: ExportSessionPayload | null;
   onNotify?: (msg: string, type?: 'success' | 'warning' | 'error' | 'info') => void;
+  accessToken?: string | null;
 }
 
 export const ExportSessionModal: React.FC<ExportSessionModalProps> = ({
@@ -25,12 +28,14 @@ export const ExportSessionModal: React.FC<ExportSessionModalProps> = ({
   onClose,
   sessionData,
   onNotify,
+  accessToken,
 }) => {
   const [format, setFormat] = useState<'json' | 'txt' | 'md'>('json');
   const [includeThinking, setIncludeThinking] = useState<boolean>(true);
   const [includeTokens, setIncludeTokens] = useState<boolean>(true);
   const [includeDriveFiles, setIncludeDriveFiles] = useState<boolean>(true);
   const [copied, setCopied] = useState<boolean>(false);
+  const [isSavingToDrive, setIsSavingToDrive] = useState<boolean>(false);
 
   // Filtered payload based on user preferences
   const preparedPayload = useMemo<ExportSessionPayload | null>(() => {
@@ -107,6 +112,32 @@ export const ExportSessionModal: React.FC<ExportSessionModalProps> = ({
     }
   };
 
+  const handleSaveToDrive = async () => {
+    if (!accessToken) {
+      if (onNotify) onNotify('يرجى تسجيل الدخول بحساب Google أولاً لحفظ الملف في Google Drive', 'warning');
+      return;
+    }
+    setIsSavingToDrive(true);
+    const mimeTypes: Record<'json' | 'txt' | 'md', string> = {
+      json: 'application/json',
+      txt: 'text/plain',
+      md: 'text/markdown',
+    };
+    try {
+      await createDriveFile(accessToken, filename, exportedContent, mimeTypes[format]);
+      if (onNotify) {
+        onNotify(`☁️ تم حفظ ملف (${filename}) في حساب Google Drive بنجاح!`, 'success');
+      }
+      onClose();
+    } catch (err: any) {
+      if (onNotify) {
+        onNotify(`فشل الحفظ في Google Drive: ${err.message}`, 'error');
+      }
+    } finally {
+      setIsSavingToDrive(false);
+    }
+  };
+
   return (
     <div
       role="dialog"
@@ -123,10 +154,10 @@ export const ExportSessionModal: React.FC<ExportSessionModalProps> = ({
             </div>
             <div>
               <h3 id="export-modal-title" className="text-sm md:text-base font-extrabold text-emerald-300">
-                تصدير سجل المحادثة محلياً (Local Export)
+                تصدير سجل المحادثة محلياً أو إلى Google Drive
               </h3>
               <p className="text-[11px] text-slate-400">
-                احفظ سجل الجلسة بالكامل على جهازك كملف JSON مهيكل أو ملف نصي TXT أو Markdown خارج Firestore
+                احفظ سجل الجلسة بالكامل على جهازك أو مباشرة في سحابة Google Drive كملف JSON مهيكل أو TXT أو Markdown
               </p>
             </div>
           </div>
@@ -234,7 +265,7 @@ export const ExportSessionModal: React.FC<ExportSessionModalProps> = ({
                 الحجم التقديري: <span className="font-mono text-slate-200">{(exportedContent.length / 1024).toFixed(1)} KB</span>
               </div>
               <div className="text-[10px] text-slate-500">
-                🔒 الحفظ محلي بالكامل على قرصك الصلب دون الحاجة لقواعد بيانات خارجية.
+                🔒 متصل بحساب Google Drive لتصدير وحفظ الملفات مباشرة أو تنزيلها محلياً.
               </div>
             </div>
           </div>
@@ -255,18 +286,28 @@ export const ExportSessionModal: React.FC<ExportSessionModalProps> = ({
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800">
+        <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800 flex-wrap">
           <button
             type="button"
             onClick={handleCopy}
-            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition flex items-center gap-1.5 shadow"
+            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition flex items-center gap-1.5 shadow cursor-pointer"
           >
             <span>{copied ? '✅ تم النسخ!' : '📋 نسخ للحافظة'}</span>
           </button>
+          {accessToken && (
+            <button
+              type="button"
+              disabled={isSavingToDrive}
+              onClick={handleSaveToDrive}
+              className="px-4 py-2 rounded-xl bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-lg cursor-pointer"
+            >
+              <span>{isSavingToDrive ? 'جاري الرفع لـ Drive...' : '☁️ حفظ في Google Drive'}</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={handleDownload}
-            className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-lg"
+            className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-lg cursor-pointer"
           >
             <span>📥 تحميل الملف محلياً ({filename})</span>
           </button>

@@ -12,7 +12,7 @@ import {
   getAccessToken,
   testConnection,
 } from './lib/firebase';
-import { DriveItem } from './lib/drive';
+import { DriveItem, fetchDriveFileText } from './lib/drive';
 import {
   SavedSession,
   SavedTurn,
@@ -286,9 +286,14 @@ export default function App() {
     if (boundDriveFiles.length > 0) {
       const manifestLines = boundDriveFiles.map((f, i) => {
         const slot = f.slot ? `[${f.slot}]` : `[FILE_${i + 1}]`;
-        return `- ${slot} ${f.name} (${f.mimeType})`;
+        let entry = `- ${slot} ${f.name} (${f.mimeType})`;
+        if (f.content) {
+          const preview = f.content.length > 12000 ? `${f.content.slice(0, 12000)}\n... [تم اقتطاع باقي الملف لكبر حجمه]` : f.content;
+          entry += `\n--- بداية محتوى الملف (${f.name}) ---\n${preview}\n--- نهاية محتوى الملف ---`;
+        }
+        return entry;
       });
-      blocks.push(`[قاعدة البيانات المصدرية وملفات Google Drive المرتبطة حالياً]\n${manifestLines.join('\n')}`);
+      blocks.push(`[قاعدة البيانات المصدرية ومحتوى ملفات Google Drive المرتبطة بالسياق حالياً]\n${manifestLines.join('\n\n')}`);
     }
 
     if (injectedMemoryBlocks.length > 0) {
@@ -764,10 +769,22 @@ ${rawPrompt}`;
       return;
     }
 
-    const updated = [...boundDriveFiles, item];
+    let itemToBind = { ...item };
+    if (!item.isFolder && accessToken && !item.content) {
+      try {
+        const text = await fetchDriveFileText(accessToken, item.id, item.mimeType);
+        if (text) {
+          itemToBind.content = text;
+        }
+      } catch (err) {
+        console.warn('Could not read drive file content:', err);
+      }
+    }
+
+    const updated = [...boundDriveFiles, itemToBind];
     setBoundDriveFiles(updated);
     updateQ10SlotsFromBound(updated);
-    showToast(`✅ تم ربط (${item.name}) بالسياق وجلسة الذكاء الاصطناعي!`);
+    showToast(`✅ تم ربط (${item.name}) وقراءة بياناته لسياق الذكاء الاصطناعي!`);
   };
 
   const handleUnbindDriveItem = (id: string) => {
@@ -1465,6 +1482,7 @@ ${rawPrompt}`;
         onClose={() => setIsExportModalOpen(false)}
         sessionData={sessionToExport}
         onNotify={(msg, type) => showToast(msg, type)}
+        accessToken={accessToken}
       />
     </div>
   );

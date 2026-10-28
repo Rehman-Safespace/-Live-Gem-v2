@@ -16,6 +16,7 @@ export interface DriveItem {
   slot?: string | null;
   sortOrder?: number;
   parents?: string[];
+  content?: string;
 }
 
 export async function fetchDriveFiles(
@@ -77,13 +78,19 @@ export async function fetchDriveFiles(
   return { files };
 }
 
-export async function fetchDriveFileText(accessToken: string, fileId: string, mimeType: string): Promise<string> {
+export async function fetchDriveFileText(
+  accessToken: string,
+  fileId: string,
+  mimeType: string
+): Promise<string> {
   if (!accessToken) throw new Error('Google Drive access token is required.');
 
   // Check if it's a Google Doc (export as plain text)
   let fetchUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
   if (mimeType === 'application/vnd.google-apps.document') {
     fetchUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/plain`;
+  } else if (mimeType === 'application/vnd.google-apps.spreadsheet') {
+    fetchUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/csv`;
   }
 
   const resp = await fetch(fetchUrl, {
@@ -97,4 +104,84 @@ export async function fetchDriveFileText(accessToken: string, fileId: string, mi
   }
 
   return await resp.text();
+}
+
+export async function createDriveFile(
+  accessToken: string,
+  fileName: string,
+  content: string,
+  mimeType: string = 'text/plain',
+  parentFolderId: string = 'root'
+): Promise<DriveItem> {
+  if (!accessToken) throw new Error('Google Drive access token is required.');
+
+  const metadata: any = {
+    name: fileName,
+    mimeType,
+  };
+  if (parentFolderId && parentFolderId !== 'root' && parentFolderId !== 'all') {
+    metadata.parents = [parentFolderId];
+  }
+
+  const boundary = '-------314159265358979323846';
+  const delimiter = `\r\n--${boundary}\r\n`;
+  const closeDelimiter = `\r\n--${boundary}--`;
+
+  const multipartRequestBody =
+    delimiter +
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+    JSON.stringify(metadata) +
+    delimiter +
+    `Content-Type: ${mimeType}\r\n\r\n` +
+    content +
+    closeDelimiter;
+
+  const resp = await fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,size,modifiedTime',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body: multipartRequestBody,
+    }
+  );
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Failed to upload to Google Drive (${resp.status}): ${errText}`);
+  }
+
+  const data = await resp.json();
+  const szBytes = parseInt(data.size || '0', 10);
+  const sizeMb = szBytes > 0 ? parseFloat((szBytes / (1024 * 1024)).toFixed(2)) : 0;
+  const { slot, sortOrder } = classifyQuranPartSlot(data.name);
+
+  return {
+    id: data.id,
+    name: data.name,
+    mimeType: data.mimeType,
+    isFolder: false,
+    modifiedTime: data.modifiedTime,
+    sizeMb,
+    slot,
+    sortOrder,
+  };
+}
+
+export async function deleteDriveFile(accessToken: string, fileId: string): Promise<void> {
+  if (!accessToken) throw new Error('Google Drive access token is required.');
+
+  const resp = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!resp.ok && resp.status !== 204 && resp.status !== 200) {
+    const errText = await resp.text();
+    throw new Error(`Failed to delete Google Drive file (${resp.status}): ${errText}`);
+  }
 }
