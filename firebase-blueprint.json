@@ -1,0 +1,98 @@
+{
+  "entities": {
+    "UserPreference": {
+      "title": "UserPreference",
+      "description": "Personal configuration, active persona, voice, and studio settings",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "activePersonaId": { "type": "string" },
+        "engineMode": { "type": "string" },
+        "preferredModel": { "type": "string" },
+        "voiceName": { "type": "string" },
+        "voiceState": { "type": "string" },
+        "strictMonad": { "type": "boolean" },
+        "thinkingLevel": { "type": "string" },
+        "quotaTier": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "activePersonaId", "preferredModel", "voiceName"]
+    },
+    "SessionRecord": {
+      "title": "SessionRecord",
+      "description": "A saved AI conversation session with thinking trace, turns, and metadata",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "titleSlug": { "type": "string" },
+        "versionTag": { "type": "string" },
+        "sessionStatus": { "type": "string" },
+        "llmModel": { "type": "string" },
+        "voiceName": { "type": "string" },
+        "voiceState": { "type": "string" },
+        "turnCount": { "type": "number" },
+        "turns": { "type": "array" },
+        "tokenSummary": { "type": "object" },
+        "boundDriveFiles": { "type": "array" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["sessionId", "userId", "title", "versionTag", "createdAt"]
+    },
+    "CustomPersona": {
+      "title": "CustomPersona",
+      "description": "User created custom AI persona and operational scenario",
+      "type": "object",
+      "properties": {
+        "personaId": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "userName": { "type": "string" },
+        "domain": { "type": "string" },
+        "systemInstruction": { "type": "string" },
+        "memoryBank": { "type": "string" },
+        "conversationRules": { "type": "string" },
+        "strictMonad": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["personaId", "userId", "title", "systemInstruction"]
+    },
+    "DriveBind": {
+      "title": "DriveBind",
+      "description": "A bound Google Drive file or folder reference for session grounding",
+      "type": "object",
+      "properties": {
+        "bindId": { "type": "string" },
+        "userId": { "type": "string" },
+        "fileId": { "type": "string" },
+        "name": { "type": "string" },
+        "mimeType": { "type": "string" },
+        "isFolder": { "type": "boolean" },
+        "slot": { "type": "string" },
+        "sizeMb": { "type": "number" },
+        "boundAt": { "type": "string" }
+      },
+      "required": ["bindId", "userId", "fileId", "name", "mimeType"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserPreference",
+      "description": "Root document storing user preferences and settings"
+    },
+    "/users/{userId}/sessions/{sessionId}": {
+      "schema": "SessionRecord",
+      "description": "Saved conversations and session history for the user"
+    },
+    "/users/{userId}/personas/{personaId}": {
+      "schema": "CustomPersona",
+      "description": "User-defined custom personas"
+    },
+    "/users/{userId}/driveBinds/{bindId}": {
+      "schema": "DriveBind",
+      "description": "List of bound Google Drive files and folders"
+    }
+  }
+}

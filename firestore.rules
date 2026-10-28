@@ -1,0 +1,68 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Test connection doc used to verify connection
+    match /test/connection {
+      allow read: if isSignedIn();
+    }
+
+    // User preferences
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && incoming().userId == request.auth.uid;
+      allow update: if isOwner(userId) && incoming().userId == request.auth.uid;
+      allow delete: if isOwner(userId);
+
+      // User Sessions
+      match /sessions/{sessionId} {
+        allow read, list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(sessionId) && incoming().userId == request.auth.uid;
+        allow update: if isOwner(userId) && isValidId(sessionId) && incoming().userId == request.auth.uid;
+        allow delete: if isOwner(userId) && isValidId(sessionId);
+      }
+
+      // User Custom Personas
+      match /personas/{personaId} {
+        allow read, list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(personaId) && incoming().userId == request.auth.uid;
+        allow update: if isOwner(userId) && isValidId(personaId) && incoming().userId == request.auth.uid;
+        allow delete: if isOwner(userId) && isValidId(personaId);
+      }
+
+      // User Bound Drive Files
+      match /driveBinds/{bindId} {
+        allow read, list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(bindId) && incoming().userId == request.auth.uid;
+        allow update: if isOwner(userId) && isValidId(bindId) && incoming().userId == request.auth.uid;
+        allow delete: if isOwner(userId) && isValidId(bindId);
+      }
+    }
+  }
+}
