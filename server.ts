@@ -277,18 +277,35 @@ app.post('/api/gemini/transcribe', async (req, res) => {
       },
     };
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.5-transcribe',
-      contents: {
-        parts: [audioPart, { text: prompt }],
-      },
-    });
+    let transcription = '';
+    let modelUsed = 'gemini-3.5-transcribe';
+    let usageMetadata: any = null;
 
-    const transcription = response.text || '';
+    const transcribeCandidates = ['gemini-3.5-transcribe', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+
+    for (const targetModel of transcribeCandidates) {
+      try {
+        const response = await ai.models.generateContent({
+          model: targetModel,
+          contents: [
+            audioPart,
+            prompt || 'Transcribe this speech accurately. If Arabic, retain natural nuances.',
+          ],
+        });
+
+        transcription = response.text || response.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        modelUsed = targetModel;
+        usageMetadata = response.usageMetadata;
+        break;
+      } catch (err: any) {
+        console.warn(`Transcribe model ${targetModel} failed: ${err.message}. Trying next fallback...`);
+      }
+    }
+
     res.json({
       transcription,
-      modelUsed: 'gemini-3.5-transcribe',
-      usageMetadata: response.usageMetadata,
+      modelUsed,
+      usageMetadata,
     });
   } catch (error: any) {
     console.error('API /api/gemini/transcribe error:', error);

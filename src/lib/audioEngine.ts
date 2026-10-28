@@ -22,6 +22,27 @@ export function base64ToUint8(b64: string): Uint8Array {
   return bytes;
 }
 
+// Convert Float32Array PCM samples (16kHz) to 16-bit linear PCM Base64 for Live API
+export function pcmFloat32ToBase64(input: Float32Array): string {
+  const buffer = new ArrayBuffer(input.length * 2);
+  const view = new DataView(buffer);
+  for (let i = 0; i < input.length; i++) {
+    const s = Math.max(-1, Math.min(1, input[i]));
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true); // 16-bit little-endian
+  }
+  return uint8ToBase64(new Uint8Array(buffer));
+}
+
+// Calculate audio RMS power level (0-100)
+export function calculateRmsLevel(samples: Float32Array): number {
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) {
+    sum += samples[i] * samples[i];
+  }
+  const rms = Math.sqrt(sum / samples.length);
+  return Math.min(100, Math.round(rms * 280));
+}
+
 export class AudioEngine {
   private outputCtx: AudioContext | null = null;
   private gainNode: GainNode | null = null;

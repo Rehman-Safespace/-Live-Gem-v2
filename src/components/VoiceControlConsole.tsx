@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useRef } from 'react';
 import { DriveItem } from '../lib/drive';
 
 interface VoiceControlConsoleProps {
@@ -27,6 +27,13 @@ interface VoiceControlConsoleProps {
   boundDriveFiles: DriveItem[];
   onUnbindDriveItem: (id: string) => void;
   onOpenDriveModal: () => void;
+  // Enhanced voice features
+  isLiveVoiceActive?: boolean;
+  onToggleLiveVoice?: () => void;
+  isTranscribingAudio?: boolean;
+  onToggleTranscribeMic?: () => void;
+  onUploadAudioFile?: (file: File) => void;
+  isTranscribingFile?: boolean;
 }
 
 export const VoiceControlConsole: React.FC<VoiceControlConsoleProps> = ({
@@ -50,7 +57,15 @@ export const VoiceControlConsole: React.FC<VoiceControlConsoleProps> = ({
   boundDriveFiles,
   onUnbindDriveItem,
   onOpenDriveModal,
+  isLiveVoiceActive = false,
+  onToggleLiveVoice,
+  isTranscribingAudio = false,
+  onToggleTranscribeMic,
+  onUploadAudioFile,
+  isTranscribingFile = false,
 }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const formatTimer = (secs: number) => {
     const m = String(Math.floor(secs / 60)).padStart(2, '0');
     const s = String(secs % 60).padStart(2, '0');
@@ -59,12 +74,20 @@ export const VoiceControlConsole: React.FC<VoiceControlConsoleProps> = ({
 
   const linkedQCount = Object.values(q10Status).filter(Boolean).length;
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && onUploadAudioFile) {
+      onUploadAudioFile(file);
+    }
+    e.target.value = '';
+  };
+
   return (
     <div className="space-y-4">
       {/* 1. Main Interaction Console */}
       <div className="rounded-2xl p-4 bg-slate-900/90 backdrop-blur-md border border-blue-500/30 flex flex-col items-center text-center space-y-3 shadow-xl">
         <div className="w-full flex items-center justify-between text-xs text-slate-400">
-          <span className="font-bold text-slate-200">🎛️ مشغّل التفاعل الصوتي والجلسة</span>
+          <span className="font-bold text-slate-200">🎛️ مشغّل التفاعل الصوتي المزدوج</span>
           <span className="font-mono text-cyan-300 bg-slate-950 px-2.5 py-0.5 rounded-lg border border-slate-800">
             {formatTimer(liveTimerSeconds)}
           </span>
@@ -84,6 +107,8 @@ export const VoiceControlConsole: React.FC<VoiceControlConsoleProps> = ({
             <span className="text-[11px] font-bold mt-1">
               {isRecording
                 ? 'إيقاف المايك'
+                : isLiveVoiceActive
+                ? 'إيقاف Live 3.8'
                 : engineMode === 'websocket_live'
                 ? 'ابدأ Live 3.8'
                 : 'تحدث بالمايك'}
@@ -104,23 +129,82 @@ export const VoiceControlConsole: React.FC<VoiceControlConsoleProps> = ({
           </button>
         </div>
 
-        {/* Dictation Toggle */}
-        <button
-          onClick={onToggleDictation}
-          className={`w-full py-2 px-3 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2 ${
-            isDictating
-              ? 'bg-cyan-600/40 border-cyan-400 text-cyan-200 animate-pulse'
-              : 'bg-cyan-600/20 hover:bg-cyan-600/35 border-cyan-500/40 text-cyan-200'
-          }`}
-        >
-          <span>✍️</span>
-          <span>{isDictating ? 'إيقاف الإملاء الصوتي (يستمع إليك...)' : 'إملاء صوتي مستمر لـ Gemini'}</span>
-        </button>
+        {/* Dedicated Voice Triggers: gemini-3.8-live & gemini-3.5-transcribe */}
+        <div className="w-full grid grid-cols-2 gap-2 text-xs">
+          {/* Live Voice Button */}
+          {onToggleLiveVoice && (
+            <button
+              onClick={onToggleLiveVoice}
+              className={`py-2 px-2.5 rounded-xl border font-bold transition flex items-center justify-center gap-1.5 shadow ${
+                isLiveVoiceActive
+                  ? 'bg-rose-600 text-white border-rose-400 animate-pulse'
+                  : 'bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-200 border-cyan-500/40'
+              }`}
+              title="محادثة صوتية لايف حية (Live API - gemini-3.8-live)"
+            >
+              <span className={`w-2 h-2 rounded-full ${isLiveVoiceActive ? 'bg-white animate-ping' : 'bg-cyan-400'}`} />
+              <span className="truncate">{isLiveVoiceActive ? 'إيقاف Live 3.8' : '⚡ Live 3.8 مباشر'}</span>
+            </button>
+          )}
+
+          {/* Transcribe Mic Button */}
+          {onToggleTranscribeMic && (
+            <button
+              onClick={onToggleTranscribeMic}
+              className={`py-2 px-2.5 rounded-xl border font-bold transition flex items-center justify-center gap-1.5 shadow ${
+                isTranscribingAudio
+                  ? 'bg-red-600 text-white border-red-300 animate-pulse'
+                  : 'bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 border-purple-500/40'
+              }`}
+              title="تسجيل وتفريغ الصوت بدقة (gemini-3.5-transcribe)"
+            >
+              <span>{isTranscribingAudio ? '⏹️' : '🎙️'}</span>
+              <span className="truncate">{isTranscribingAudio ? 'إيقاف وتفريغ' : 'تفريغ 3.5 بالمايك'}</span>
+            </button>
+          )}
+        </div>
+
+        {/* Secondary Audio Row: File Upload Transcribe & Web Speech */}
+        <div className="w-full flex items-center gap-2">
+          {onUploadAudioFile && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg,.aac,.flac"
+                className="hidden"
+                onChange={handleFileChange}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isTranscribingFile}
+                className="flex-1 py-1.5 px-2 rounded-xl bg-amber-950/60 hover:bg-amber-900/80 border border-amber-600/40 text-amber-200 text-[11px] font-bold transition flex items-center justify-center gap-1 disabled:opacity-50"
+                title="رفع ملف صوتي وتفريغه عبر gemini-3.5-transcribe"
+              >
+                <span>{isTranscribingFile ? '⏳' : '📁'}</span>
+                <span>{isTranscribingFile ? 'جاري التفريغ...' : 'تفريغ ملف صوتي'}</span>
+              </button>
+            </>
+          )}
+
+          <button
+            onClick={onToggleDictation}
+            className={`flex-1 py-1.5 px-2 rounded-xl border text-[11px] font-bold transition flex items-center justify-center gap-1 ${
+              isDictating
+                ? 'bg-emerald-600/40 border-emerald-400 text-emerald-200 animate-pulse'
+                : 'bg-slate-950 hover:bg-slate-800 border-slate-700 text-slate-300'
+            }`}
+            title="إملاء متصفح فوري (Web Speech API)"
+          >
+            <span>✍️</span>
+            <span>{isDictating ? 'إملاء متصفح نشط' : 'إملاء المتصفح'}</span>
+          </button>
+        </div>
 
         {/* Control Toggles */}
         <div className="w-full bg-slate-950/90 p-2.5 rounded-xl border border-slate-800 text-right space-y-1.5 text-[11px]">
           <label className="flex items-center justify-between cursor-pointer">
-            <span className="text-cyan-200 font-semibold">⚡ إرسال تلقائي بعد التوقف (1.8 ثانية):</span>
+            <span className="text-cyan-200 font-semibold">⚡ إرسال تلقائي بعد التفريغ:</span>
             <input
               type="checkbox"
               checked={autoSendDictation}
@@ -142,8 +226,8 @@ export const VoiceControlConsole: React.FC<VoiceControlConsoleProps> = ({
         {/* Audio Meter */}
         <div className="w-full space-y-1 pt-0.5">
           <div className="flex justify-between text-[10px] text-slate-400">
-            <span>مؤشر التقاط الصوت</span>
-            <span className={isMuted ? 'text-amber-400 font-bold' : 'text-emerald-400 font-semibold'}>
+            <span>مؤشر التقاط الصوت الحقيقي (16kHz / RMS)</span>
+            <span className={isMuted ? 'text-amber-400 font-bold' : isRecording ? 'text-emerald-400 font-semibold' : 'text-slate-400'}>
               {isMuted ? '🔇 مكتوم مؤقتاً' : isRecording ? '🟢 المايك نشط' : 'المايك جاهز'}
             </span>
           </div>

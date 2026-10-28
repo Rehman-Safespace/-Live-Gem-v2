@@ -28,7 +28,11 @@ import {
   BUILTIN_PERSONAS,
 } from './lib/monadLedger';
 import { VOICE_PROFILES_CATALOG, VOCAL_STATES_CATALOG } from './lib/voiceCatalog';
-import { globalAudioEngine } from './lib/audioEngine';
+import {
+  globalAudioEngine,
+  pcmFloat32ToBase64,
+  calculateRmsLevel,
+} from './lib/audioEngine';
 import {
   QuotaTelemetryState,
   createInitialTelemetryState,
@@ -150,8 +154,12 @@ export default function App() {
   const [audioMeterLevel, setAudioMeterLevel] = useState<number>(0);
   const [isTestingVoice, setIsTestingVoice] = useState<boolean>(false);
 
-  // Mic & Live state
+  // Mic, Live & Transcription state
   const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [isLiveVoiceActive, setIsLiveVoiceActive] = useState<boolean>(false);
+  const [isTranscribingAudio, setIsTranscribingAudio] = useState<boolean>(false);
+  const [isTranscribingFile, setIsTranscribingFile] = useState<boolean>(false);
+  const [activeVoiceMode, setActiveVoiceMode] = useState<'none' | 'live_ws' | 'transcribe_mic' | 'transcribe_file' | 'web_speech'>('none');
   const [isDictating, setIsDictating] = useState<boolean>(false);
   const [liveTimerSeconds, setLiveTimerSeconds] = useState<number>(0);
   const [userTranscript, setUserTranscript] = useState<string>('');
@@ -166,12 +174,21 @@ export default function App() {
 
   // Refs
   const liveWsRef = useRef<WebSocket | null>(null);
+  const liveAudioContextRef = useRef<AudioContext | null>(null);
+  const liveProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const liveSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const liveStreamRef = useRef<MediaStream | null>(null);
+  const liveCurrentTurnRef = useRef<{ user: string; model: string }>({ user: '', model: '' });
+
   const speechRecRef = useRef<any>(null);
   const silenceTimerRef = useRef<any>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const activeStreamRef = useRef<MediaStream | null>(null);
   const liveIntervalRef = useRef<any>(null);
+  const transcribeAudioCtxRef = useRef<AudioContext | null>(null);
+  const transcribeAnalyserRef = useRef<AnalyserNode | null>(null);
+  const transcribeAnimFrameRef = useRef<number | null>(null);
 
   const showToast = (msg: string, type: 'success' | 'warning' | 'error' | 'info' = 'success') => {
     setToastMessage(msg);
@@ -408,6 +425,22 @@ ${rawPrompt}`;
     const effectivePrompt = buildUserPromptWithLock(textToSend);
     const timestamp = new Date().toLocaleTimeString();
 
+    // If Live API session is active, route prompt directly into real-time live session
+    if (isLiveVoiceActive && liveWsRef.current?.readyState === WebSocket.OPEN) {
+      liveWsRef.current.send(
+        JSON.stringify({
+          type: 'TEXT_INPUT',
+          text: effectivePrompt,
+        })
+      );
+      setUserTranscript(textToSend);
+      liveCurrentTurnRef.current.user = textToSend;
+      setSpeakerState('speaking');
+      setSpeakerLabel('⚡ تم إرسال النص إلى Live 3.8...');
+      setIsGenerating(false);
+      return;
+    }
+
     const newTurn: SavedTurn = {
       turnIndex: turns.length + 1,
       timestamp,
@@ -541,99 +574,117 @@ ${rawPrompt}`;
     setIsTestingVoice(false);
   };
 
-  const handleToggleMic = async () => {
-    if (engineMode === 'gemini_app_3_8_thinking') {
-      handleToggleDictation();
-      return;
+  // 1. Live Voice Audio Streaming (16kHz PCM Float32 -> Int16 Base64 for gemini-3.8-live)
+  const cleanupLiveAudio = () => {
+    if (liveProcessorRef.current) {
+      try {
+        liveProcessorRef.current.disconnect();
+      } catch (_) {}
+      liveProcessorRef.current = null;
     }
-
-    if (engineMode === 'websocket_live') {
-      if (isRecording) {
-        stopLiveWebSocket();
-      } else {
-        startLiveWebSocket();
-      }
-      return;
+    if (liveSourceRef.current) {
+      try {
+        liveSourceRef.current.disconnect();
+      } catch (_) {}
+      liveSourceRef.current = null;
     }
-
-    if (isRecording) {
-      stopRecordingAndTranscribe();
-    } else {
-      startAudioRecording();
+    if (liveAudioContextRef.current && liveAudioContextRef.current.state !== 'closed') {
+      try {
+        liveAudioContextRef.current.close();
+      } catch (_) {}
+      liveAudioContextRef.current = null;
     }
+    if (liveStreamRef.current) {
+      try {
+        liveStreamRef.current.getTracks().forEach(t => t.stop());
+      } catch (_) {}
+      liveStreamRef.current = null;
+    }
+    setAudioMeterLevel(0);
   };
 
-  const startAudioRecording = async () => {
+  const startLiveAudioStreaming = async (ws: WebSocket) => {
     try {
+      cleanupLiveAudio();
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: selectedInputId ? { deviceId: { exact: selectedInputId } } : true,
+        audio: {
+          deviceId: selectedInputId ? { exact: selectedInputId } : undefined,
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       });
-      activeStreamRef.current = stream;
-      recordedChunksRef.current = [];
+      liveStreamRef.current = stream;
 
-      const mr = new MediaRecorder(stream);
-      mediaRecorderRef.current = mr;
+      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioCtxClass({ sampleRate: 16000 });
+      liveAudioContextRef.current = ctx;
 
-      mr.ondataavailable = e => {
-        if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+      const source = ctx.createMediaStreamSource(stream);
+      liveSourceRef.current = source;
+
+      // ScriptProcessor with 4096 samples (~256ms chunk at 16kHz)
+      const processor = ctx.createScriptProcessor(4096, 1, 1);
+      liveProcessorRef.current = processor;
+
+      processor.onaudioprocess = e => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const inputData = e.inputBuffer.getChannelData(0);
+
+        // Calculate RMS audio meter level
+        const level = calculateRmsLevel(inputData);
+        setAudioMeterLevel(level);
+
+        if (isMuted) return;
+
+        // Convert Float32Array PCM to 16-bit linear PCM base64
+        const pcmBase64 = pcmFloat32ToBase64(inputData);
+        ws.send(
+          JSON.stringify({
+            type: 'AUDIO_INPUT',
+            audio: pcmBase64,
+          })
+        );
       };
 
-      mr.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        const blob = new Blob(recordedChunksRef.current, { type: mr.mimeType || 'audio/webm' });
-        const reader = new FileReader();
-        reader.onloadend = async () => {
-          const b64 = (reader.result as string).split(',')[1];
-          await transcribeAudioWithGemini(b64, mr.mimeType || 'audio/webm');
-        };
-        reader.readAsDataURL(blob);
-      };
+      source.connect(processor);
 
-      mr.start();
-      setIsRecording(true);
-      startLiveTimer();
-      setSpeakerState('listening');
-      setSpeakerLabel('🎙️ يستمع ويسجل صوتك...');
-    } catch (e: any) {
-      showToast('يرجى السماح بصلاحية المايك في المتصفح', 'error');
-    }
-  };
-
-  const stopRecordingAndTranscribe = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    setIsRecording(false);
-    stopLiveTimer();
-    setSpeakerState('idle');
-  };
-
-  const transcribeAudioWithGemini = async (audioData: string, mimeType: string) => {
-    setSpeakerState('synthesizing');
-    setSpeakerLabel('⏳ جاري تفريغ الصوت عبر gemini-3.5-transcribe...');
-    try {
-      const resp = await fetch('/api/gemini/transcribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ audioData, mimeType }),
-      });
-      const data = await resp.json();
-      if (data.transcription) {
-        setUserTranscript(data.transcription);
-        showToast(`✅ تم تفريغ الصوت: "${data.transcription.slice(0, 40)}..."`);
-        handleSendPrompt(data.transcription);
-      }
-    } catch (e: any) {
-      showToast(`فشل التفريغ الصوتي: ${e.message}`, 'error');
-      setSpeakerState('idle');
+      // Connect to zero-gain node destination so browser executes audio process callback reliably
+      const silentGain = ctx.createGain();
+      silentGain.gain.value = 0;
+      processor.connect(silentGain);
+      silentGain.connect(ctx.destination);
+    } catch (err: any) {
+      console.warn('Microphone error for Live API:', err);
+      showToast('يرجى السماح بصلاحية المايك لتفعيل المحادثة الصوتية المباشرة (gemini-3.8-live)', 'error');
+      stopLiveWebSocket();
     }
   };
 
   const startLiveWebSocket = () => {
+    if (isLiveVoiceActive || liveWsRef.current) {
+      stopLiveWebSocket();
+      return;
+    }
+    if (isTranscribingAudio) {
+      stopRecordingAndTranscribe();
+    }
+    if (isDictating && speechRecRef.current) {
+      speechRecRef.current.stop();
+      setIsDictating(false);
+    }
+    globalAudioEngine.stopAllPlayback();
+
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${protocol}//${window.location.host}/live-ws`);
       liveWsRef.current = ws;
+
+      setSpeakerState('synthesizing');
+      setSpeakerLabel('⏳ جاري الاتصال بـ Live API (gemini-3.8-live)...');
+      setActiveVoiceMode('live_ws');
 
       ws.onopen = () => {
         ws.send(
@@ -644,50 +695,345 @@ ${rawPrompt}`;
             systemInstruction: buildCompiledSystemInstruction(),
           })
         );
-        setIsRecording(true);
-        startLiveTimer();
-        setSpeakerState('listening');
-        setSpeakerLabel('⚡ متصل لايف (gemini-3.8-live)');
       };
 
       ws.onmessage = async event => {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'AUDIO_CHUNK' && msg.audio) {
-          setSpeakerState('speaking');
-          setSpeakerLabel(`🔊 يتحدث الآن (Live 3.8 - ${voiceName})`);
-          await globalAudioEngine.playPcmOrWavChunk(msg.audio, 'audio/pcm;rate=24000');
-        }
-        if (msg.type === 'OUTPUT_TRANSCRIPTION') {
-          setModelTranscript(prev => `${prev} ${msg.text}`);
-        }
-        if (msg.type === 'INPUT_TRANSCRIPTION') {
-          setUserTranscript(prev => `${prev} ${msg.text}`);
-        }
-        if (msg.type === 'TURN_COMPLETE') {
-          setSpeakerState('listening');
-          setSpeakerLabel('🎙️ Live 3.8 يستمع إليك...');
+        try {
+          const msg = JSON.parse(event.data);
+
+          if (msg.type === 'SESSION_READY') {
+            setIsLiveVoiceActive(true);
+            setIsRecording(true);
+            startLiveTimer();
+            setSpeakerState('listening');
+            setSpeakerLabel(`⚡ متصل لايف (${msg.model || 'gemini-3.8-live'})`);
+            showToast(`⚡ بدأت المحادثة الصوتية المباشرة (${msg.model || 'gemini-3.8-live'})`, 'success');
+            await startLiveAudioStreaming(ws);
+          } else if (msg.type === 'INTERRUPTED') {
+            globalAudioEngine.stopAllPlayback();
+            setSpeakerState('listening');
+            setSpeakerLabel('🎙️ تمت المقاطعة — يستمع إليك...');
+          } else if (msg.type === 'AUDIO_CHUNK' && msg.audio) {
+            setSpeakerState('speaking');
+            setSpeakerLabel(`🔊 يتحدث الآن (Live 3.8 - ${voiceName})`);
+            await globalAudioEngine.playPcmOrWavChunk(msg.audio, 'audio/pcm;rate=24000', () => {
+              if (liveWsRef.current?.readyState === WebSocket.OPEN) {
+                setSpeakerState('listening');
+                setSpeakerLabel('🎙️ Live 3.8 يستمع إليك...');
+              }
+            });
+          } else if (msg.type === 'OUTPUT_TRANSCRIPTION') {
+            setModelTranscript(prev => `${prev} ${msg.text}`);
+            liveCurrentTurnRef.current.model += ` ${msg.text}`;
+          } else if (msg.type === 'INPUT_TRANSCRIPTION') {
+            setUserTranscript(prev => `${prev} ${msg.text}`);
+            liveCurrentTurnRef.current.user += ` ${msg.text}`;
+          } else if (msg.type === 'TURN_COMPLETE') {
+            setSpeakerState('listening');
+            setSpeakerLabel('🎙️ Live 3.8 يستمع إليك...');
+
+            const userText = liveCurrentTurnRef.current.user.trim();
+            const modelText = liveCurrentTurnRef.current.model.trim();
+            if (userText || modelText) {
+              const liveTurn: SavedTurn = {
+                turnIndex: turns.length + 1,
+                timestamp: new Date().toLocaleTimeString(),
+                inputModality: 'live_voice_stream',
+                userInput: userText || '(محادثة صوتية لايف)',
+                modelOutput: modelText || '...',
+                modelUsed: 'gemini-3.8-live',
+                voiceNameUsed: voiceName,
+                voiceStateUsed: voiceState,
+              };
+              setTurns(prev => [...prev, liveTurn]);
+              liveCurrentTurnRef.current = { user: '', model: '' };
+
+              if (user && autoCloudSync) {
+                persistSessionToCloud(false, 'ACTIVE');
+              }
+            }
+          } else if (msg.type === 'ERROR') {
+            showToast(`تنبيه Live API: ${msg.message}`, 'error');
+            stopLiveWebSocket();
+          } else if (msg.type === 'SESSION_CLOSED') {
+            stopLiveWebSocket();
+          }
+        } catch (err: any) {
+          console.error('Error in Live WS message parsing:', err);
         }
       };
 
+      ws.onerror = err => {
+        console.error('Live WS error:', err);
+        showToast('تعذر الاتصال بـ Live API WebSocket', 'error');
+        stopLiveWebSocket();
+      };
+
       ws.onclose = () => {
-        setIsRecording(false);
-        stopLiveTimer();
-        setSpeakerState('idle');
-        setSpeakerLabel(`🔇 المتحدث: جاهز (${voiceName})`);
+        stopLiveWebSocket();
       };
     } catch (e: any) {
       showToast(`فشل فتح اتصال Live API: ${e.message}`, 'error');
+      stopLiveWebSocket();
     }
   };
 
   const stopLiveWebSocket = () => {
+    cleanupLiveAudio();
     if (liveWsRef.current) {
-      liveWsRef.current.close();
+      try {
+        liveWsRef.current.close();
+      } catch (_) {}
       liveWsRef.current = null;
     }
+    setIsLiveVoiceActive(false);
     setIsRecording(false);
+    setActiveVoiceMode('none');
     stopLiveTimer();
     setSpeakerState('idle');
+    setSpeakerLabel(`🔇 المتحدث: جاهز (${voiceName})`);
+  };
+
+  // 2. Audio Recording & Transcription with gemini-3.5-transcribe
+  const startAudioRecording = async () => {
+    if (isLiveVoiceActive) {
+      stopLiveWebSocket();
+    }
+    if (isDictating && speechRecRef.current) {
+      speechRecRef.current.stop();
+      setIsDictating(false);
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: selectedInputId ? { deviceId: { exact: selectedInputId } } : true,
+      });
+      activeStreamRef.current = stream;
+      recordedChunksRef.current = [];
+
+      try {
+        const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+        const ctx = new AudioCtxClass();
+        transcribeAudioCtxRef.current = ctx;
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        transcribeAnalyserRef.current = analyser;
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const updateMeter = () => {
+          if (!activeStreamRef.current) return;
+          analyser.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+          const avg = sum / dataArray.length;
+          setAudioMeterLevel(Math.min(100, Math.round(avg * 1.5)));
+          transcribeAnimFrameRef.current = requestAnimationFrame(updateMeter);
+        };
+        updateMeter();
+      } catch (_) {}
+
+      const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
+      const chosenMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
+
+      const mr = new MediaRecorder(stream, chosenMime ? { mimeType: chosenMime } : undefined);
+      mediaRecorderRef.current = mr;
+
+      mr.ondataavailable = e => {
+        if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+      };
+
+      mr.onstop = async () => {
+        if (transcribeAnimFrameRef.current) {
+          cancelAnimationFrame(transcribeAnimFrameRef.current);
+          transcribeAnimFrameRef.current = null;
+        }
+        if (transcribeAudioCtxRef.current && transcribeAudioCtxRef.current.state !== 'closed') {
+          try {
+            transcribeAudioCtxRef.current.close();
+          } catch (_) {}
+          transcribeAudioCtxRef.current = null;
+        }
+        setAudioMeterLevel(0);
+
+        stream.getTracks().forEach(t => t.stop());
+        activeStreamRef.current = null;
+
+        const blobMime = mr.mimeType || 'audio/webm';
+        const blob = new Blob(recordedChunksRef.current, { type: blobMime });
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const resultStr = reader.result as string;
+          const b64 = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
+          await transcribeAudioWithGemini(b64, blobMime);
+        };
+        reader.readAsDataURL(blob);
+      };
+
+      mr.start(250);
+      setIsRecording(true);
+      setIsTranscribingAudio(true);
+      setActiveVoiceMode('transcribe_mic');
+      startLiveTimer();
+      setSpeakerState('listening');
+      setSpeakerLabel('🎙️ يستمع ويسجل للتفريغ بـ gemini-3.5-transcribe...');
+    } catch (e: any) {
+      showToast('يرجى السماح بصلاحية المايك لتسجيل الصوت وتفريغه', 'error');
+    }
+  };
+
+  const stopRecordingAndTranscribe = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+    setIsTranscribingAudio(false);
+    setActiveVoiceMode('none');
+    stopLiveTimer();
+    setSpeakerState('idle');
+  };
+
+  const handleTranscribeAudioFile = async (file: File) => {
+    if (!file) return;
+    setIsTranscribingFile(true);
+    setActiveVoiceMode('transcribe_file');
+    setSpeakerState('synthesizing');
+    setSpeakerLabel(`⏳ جاري تفريغ (${file.name}) عبر gemini-3.5-transcribe...`);
+    showToast(`⏳ جاري قراءة وتفريغ الملف الصوتي: ${file.name}...`, 'info');
+
+    try {
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        try {
+          const resultStr = reader.result as string;
+          const b64 = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
+          const mimeType = file.type || 'audio/mp3';
+
+          const resp = await fetch('/api/gemini/transcribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              audioData: b64,
+              mimeType,
+              prompt: 'Transcribe this audio accurately. If it is in Arabic, transcribe in natural Egyptian or Modern Standard Arabic with full accuracy.',
+            }),
+          });
+
+          if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || 'Transcription failed');
+          }
+
+          const data = await resp.json();
+          const transcription = data.transcription || '';
+          if (transcription) {
+            setUserTranscript(transcription);
+            setInputPrompt(prev => (prev ? `${prev}\n${transcription}` : transcription));
+            showToast(`✅ تم تفريغ الملف الصوتي بنجاح (${transcription.length} حرف) عبر gemini-3.5-transcribe`, 'success');
+            setSpeakerState('idle');
+            setSpeakerLabel(`🔊 تم التفريغ (${file.name})`);
+          } else {
+            showToast('لم يتم العثور على كلام واضح في الملف الصوتي', 'warning');
+            setSpeakerState('idle');
+          }
+        } catch (innerErr: any) {
+          showToast(`خطأ في تفريغ الملف الصوتي: ${innerErr.message}`, 'error');
+          setSpeakerState('idle');
+        } finally {
+          setIsTranscribingFile(false);
+          setActiveVoiceMode('none');
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (e: any) {
+      setIsTranscribingFile(false);
+      setActiveVoiceMode('none');
+      showToast(`فشل قراءة الملف: ${e.message}`, 'error');
+      setSpeakerState('idle');
+    }
+  };
+
+  const transcribeAudioWithGemini = async (audioData: string, mimeType: string) => {
+    setSpeakerState('synthesizing');
+    setSpeakerLabel('⏳ جاري تفريغ الصوت عبر gemini-3.5-transcribe...');
+    try {
+      const resp = await fetch('/api/gemini/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audioData,
+          mimeType,
+          prompt: 'Transcribe this speech accurately. Retain Egyptian Arabic dialect nuances and technical terms.',
+        }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json();
+        throw new Error(err.error || 'Server error');
+      }
+
+      const data = await resp.json();
+      if (data.transcription) {
+        setUserTranscript(data.transcription);
+        setInputPrompt(data.transcription);
+        showToast(`✅ تم تفريغ الصوت بـ gemini-3.5-transcribe: "${data.transcription.slice(0, 45)}..."`, 'success');
+        if (autoSendDictation) {
+          handleSendPrompt(data.transcription);
+        }
+      } else {
+        showToast('لم يتم التقاط كلام واضح لتفريغه', 'warning');
+        setSpeakerState('idle');
+      }
+    } catch (e: any) {
+      showToast(`فشل التفريغ الصوتي: ${e.message}`, 'error');
+      setSpeakerState('idle');
+    }
+  };
+
+  const handleToggleLiveVoice = () => {
+    if (isLiveVoiceActive) {
+      stopLiveWebSocket();
+    } else {
+      startLiveWebSocket();
+    }
+  };
+
+  const handleToggleTranscribeMic = () => {
+    if (isTranscribingAudio) {
+      stopRecordingAndTranscribe();
+    } else {
+      startAudioRecording();
+    }
+  };
+
+  const handleToggleMic = async () => {
+    if (isLiveVoiceActive) {
+      stopLiveWebSocket();
+      return;
+    }
+
+    if (isTranscribingAudio) {
+      stopRecordingAndTranscribe();
+      return;
+    }
+
+    if (isDictating) {
+      handleToggleDictation();
+      return;
+    }
+
+    if (engineMode === 'websocket_live') {
+      startLiveWebSocket();
+      return;
+    }
+
+    if (engineMode === 'gemini_app_3_8_thinking') {
+      handleToggleDictation();
+      return;
+    }
+
+    startAudioRecording();
   };
 
   const handleToggleDictation = () => {
@@ -1194,6 +1540,12 @@ ${rawPrompt}`;
               boundDriveFiles={boundDriveFiles}
               onUnbindDriveItem={handleUnbindDriveItem}
               onOpenDriveModal={() => setIsDriveModalOpen(true)}
+              isLiveVoiceActive={isLiveVoiceActive}
+              onToggleLiveVoice={handleToggleLiveVoice}
+              isTranscribingAudio={isTranscribingAudio}
+              onToggleTranscribeMic={handleToggleTranscribeMic}
+              onUploadAudioFile={handleTranscribeAudioFile}
+              isTranscribingFile={isTranscribingFile}
             />
           )}
 
@@ -1402,6 +1754,12 @@ ${rawPrompt}`;
               boundDriveFiles={boundDriveFiles}
               onUnbindDriveItem={handleUnbindDriveItem}
               onOpenDriveModal={() => setIsDriveModalOpen(true)}
+              isLiveVoiceActive={isLiveVoiceActive}
+              onToggleLiveVoice={handleToggleLiveVoice}
+              isTranscribingAudio={isTranscribingAudio}
+              onToggleTranscribeMic={handleToggleTranscribeMic}
+              onUploadAudioFile={handleTranscribeAudioFile}
+              isTranscribingFile={isTranscribingFile}
             />
           </div>
 
@@ -1468,6 +1826,12 @@ ${rawPrompt}`;
               isInterimUser={isInterimUser}
               voiceName={voiceName}
               voiceStateShort={VOCAL_STATES_CATALOG[voiceState]?.short || 'الرايق العميق'}
+              activeVoiceMode={activeVoiceMode}
+              onClearCaptions={() => {
+                setUserTranscript('');
+                setModelTranscript('');
+              }}
+              onReplayModelAudio={speakText}
             />
 
             {/* Chat Stream */}
@@ -1486,6 +1850,15 @@ ${rawPrompt}`;
               isGenerating={isGenerating}
               onMicClick={handleToggleMic}
               isRecording={isRecording}
+              isLiveVoiceActive={isLiveVoiceActive}
+              onToggleLiveVoice={handleToggleLiveVoice}
+              isTranscribingAudio={isTranscribingAudio}
+              onToggleTranscribeMic={handleToggleTranscribeMic}
+              onUploadAudioFile={handleTranscribeAudioFile}
+              isTranscribingFile={isTranscribingFile}
+              isDictating={isDictating}
+              onToggleDictation={handleToggleDictation}
+              liveTimerSeconds={liveTimerSeconds}
             />
           </div>
         </div>
