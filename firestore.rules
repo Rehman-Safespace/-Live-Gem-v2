@@ -30,7 +30,7 @@ service cloud.firestore {
 
     // Test connection doc used to verify connection
     match /test/connection {
-      allow read: if isSignedIn();
+      allow read: if true;
     }
 
     // User preferences
