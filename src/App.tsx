@@ -53,6 +53,7 @@ import { LiveCaptionsStage } from './components/LiveCaptionsStage';
 import { ChatStream } from './components/ChatStream';
 import { PromptInputBar } from './components/PromptInputBar';
 import { ExportSessionModal } from './components/ExportSessionModal';
+import { CloudSyncSettingsCard } from './components/CloudSyncSettingsCard';
 import {
   ExportSessionPayload,
   generateSessionJson,
@@ -84,6 +85,27 @@ export default function App() {
   const [voiceState, setVoiceState] = useState<string>('raayeq_ameeq');
   const [autoSpeakReply, setAutoSpeakReply] = useState<boolean>(true);
   const [autoSendDictation, setAutoSendDictation] = useState<boolean>(true);
+  const [autoCloudSync, setAutoCloudSync] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('monad_auto_cloud_sync');
+      return saved !== null ? saved === 'true' : true;
+    } catch (_) {
+      return true;
+    }
+  });
+
+  const handleToggleAutoCloudSync = (enabled: boolean) => {
+    setAutoCloudSync(enabled);
+    try {
+      localStorage.setItem('monad_auto_cloud_sync', String(enabled));
+    } catch (_) {}
+    showToast(
+      enabled
+        ? '☁️ تم تفعيل المزامنة التلقائية للجلسات في Firestore'
+        : '📡 تم إيقاف المزامنة التلقائية لحفظ الباندويث واستهلاك الإنترنت',
+      'info'
+    );
+  };
 
   // Session state
   const [sessionTitle, setSessionTitle] = useState<string>('تحليل_الشيخ_جيمناي');
@@ -452,7 +474,7 @@ ${rawPrompt}`;
         speakText(outputText);
       }
 
-      if (user) {
+      if (user && autoCloudSync) {
         persistSessionToCloud(false, 'ACTIVE');
       }
     } catch (err: any) {
@@ -1030,6 +1052,21 @@ ${rawPrompt}`;
         {/* Desktop Top Sections (Collapsible) */}
         {showDesktopSettings && (
           <div className="hidden lg:block space-y-3">
+            <CloudSyncSettingsCard
+              autoCloudSync={autoCloudSync}
+              onToggleAutoCloudSync={handleToggleAutoCloudSync}
+              onManualSync={() => {
+                if (!user) {
+                  showToast('يرجى تسجيل الدخول بحساب Google أولاً', 'warning');
+                  return;
+                }
+                persistSessionToCloud(false, 'ACTIVE');
+                showToast('☁️ تم حفظ ومزامنة الجلسة الحالية في Firestore بنجاح!');
+              }}
+              isLoggedIn={Boolean(user)}
+              turnsCount={turns.length}
+            />
+
             <QuotaTelemetryBar
               telemetry={telemetry}
               quotaTier={quotaTier}
@@ -1216,6 +1253,21 @@ ${rawPrompt}`;
 
           {mobileTab === 'settings' && (
             <div className="space-y-3">
+              <CloudSyncSettingsCard
+                autoCloudSync={autoCloudSync}
+                onToggleAutoCloudSync={handleToggleAutoCloudSync}
+                onManualSync={() => {
+                  if (!user) {
+                    showToast('يرجى تسجيل الدخول بحساب Google أولاً', 'warning');
+                    return;
+                  }
+                  persistSessionToCloud(false, 'ACTIVE');
+                  showToast('☁️ تم حفظ ومزامنة الجلسة الحالية في Firestore بنجاح!');
+                }}
+                isLoggedIn={Boolean(user)}
+                turnsCount={turns.length}
+              />
+
               <QuotaTelemetryBar
                 telemetry={telemetry}
                 quotaTier={quotaTier}

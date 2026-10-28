@@ -14,6 +14,7 @@
         "strictMonad": { "type": "boolean" },
         "thinkingLevel": { "type": "string" },
         "quotaTier": { "type": "string" },
+        "autoCloudSync": { "type": "boolean" },
         "updatedAt": { "type": "string" }
       },
       "required": ["userId", "activePersonaId", "preferredModel", "voiceName"]
