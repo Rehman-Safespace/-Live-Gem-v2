@@ -1,7 +1,9 @@
 {
   "name": "Remix Gemini Studio \u0026 MONAD Sovereign Kernel",
   "description": "Multi-device AI Studio with model fallback, Live voice, TTS, audio transcription, Google Drive binding, and personal context sessions.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": [
+    "microphone"
+  ],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
