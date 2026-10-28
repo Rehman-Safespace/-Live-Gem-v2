@@ -57,6 +57,7 @@ import { LiveCaptionsStage } from './components/LiveCaptionsStage';
 import { ChatStream } from './components/ChatStream';
 import { PromptInputBar } from './components/PromptInputBar';
 import { ExportSessionModal } from './components/ExportSessionModal';
+import { DeviceAccessModal } from './components/DeviceAccessModal';
 import { CloudSyncSettingsCard } from './components/CloudSyncSettingsCard';
 import {
   ExportSessionPayload,
@@ -140,6 +141,7 @@ export default function App() {
   const [isQuotaModalOpen, setIsQuotaModalOpen] = useState<boolean>(false);
   const [isRecallModalOpen, setIsRecallModalOpen] = useState<boolean>(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
+  const [isDeviceModalOpen, setIsDeviceModalOpen] = useState<boolean>(false);
   const [sessionToExport, setSessionToExport] = useState<ExportSessionPayload | null>(null);
 
   // Audio & Hardware routing
@@ -1377,15 +1379,23 @@ ${rawPrompt}`;
           onOpenDriveModal={() => setIsDriveModalOpen(true)}
           onOpenQuotaModal={() => setIsQuotaModalOpen(true)}
           onTogglePersonaDrawer={() => setIsPersonaDrawerOpen(!isPersonaDrawerOpen)}
+          onOpenDeviceAccessModal={() => setIsDeviceModalOpen(true)}
           speakerState={speakerState}
           speakerLabel={speakerLabel}
         />
 
         {/* Collapsible Telemetry & Settings Toggle for Desktop */}
         <div className="hidden lg:flex items-center justify-between px-2 text-xs text-slate-400">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <span className="font-bold text-cyan-300">لوحة الإعدادات والكوتا السريعة</span>
             <span className="text-[10px] text-slate-500 font-mono">({preferredModel} • {voiceName})</span>
+            <button
+              onClick={() => setIsDeviceModalOpen(true)}
+              className="text-[11px] text-blue-300 hover:text-blue-200 bg-blue-950/60 px-2.5 py-0.5 rounded-lg border border-blue-500/40 font-bold flex items-center gap-1 transition"
+              title="عرض رمز QR وروابط التثبيت على iPhone و Android و Windows"
+            >
+              <span>📱 فتح على الهاتف واللابتوب (QR)</span>
+            </button>
           </div>
           <button
             onClick={() => setShowDesktopSettings(!showDesktopSettings)}
@@ -1509,6 +1519,21 @@ ${rawPrompt}`;
           </button>
         </div>
 
+        {/* Mobile Quick Device Access Banner */}
+        <div className="lg:hidden flex items-center justify-between px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-[11px]">
+          <div className="flex items-center gap-1.5 text-slate-300">
+            <span>📱</span>
+            <span>تثبيت كـ PWA على iPhone و Android</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsDeviceModalOpen(true)}
+            className="text-cyan-400 hover:text-cyan-300 font-bold underline"
+          >
+            عرض الـ QR ودليل التثبيت ↗
+          </button>
+        </div>
+
         {/* Mobile Tab Contents */}
         <div className="lg:hidden">
           {mobileTab === 'voice' && (
@@ -1619,6 +1644,26 @@ ${rawPrompt}`;
                 isLoggedIn={Boolean(user)}
                 turnsCount={turns.length}
               />
+
+              {/* Multi-Device Installation Card */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-blue-950/70 via-indigo-950/60 to-purple-950/50 border border-blue-500/40 flex items-center justify-between gap-3 shadow-lg">
+                <div className="space-y-0.5">
+                  <h4 className="text-xs font-bold text-blue-200 flex items-center gap-1.5">
+                    <span>📱</span>
+                    <span>تثبيت وتشغيل التطبيق على كافة الأجهزة</span>
+                  </h4>
+                  <p className="text-[11px] text-slate-400">
+                    دليل شامل لـ iPhone (Safari) و Android (Chrome) واللابتوب مع رمز QR للمسح الفوري.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsDeviceModalOpen(true)}
+                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md shrink-0 transition"
+                >
+                  فتح الدليل ↗
+                </button>
+              </div>
 
               <QuotaTelemetryBar
                 telemetry={telemetry}
@@ -1908,6 +1953,11 @@ ${rawPrompt}`;
         sessionData={sessionToExport}
         onNotify={(msg, type) => showToast(msg, type)}
         accessToken={accessToken}
+      />
+
+      <DeviceAccessModal
+        isOpen={isDeviceModalOpen}
+        onClose={() => setIsDeviceModalOpen(false)}
       />
     </div>
   );

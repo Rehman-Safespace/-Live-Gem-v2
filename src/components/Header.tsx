@@ -17,6 +17,7 @@ interface HeaderProps {
   onOpenDriveModal: () => void;
   onOpenQuotaModal: () => void;
   onTogglePersonaDrawer: () => void;
+  onOpenDeviceAccessModal?: () => void;
   speakerState: 'idle' | 'speaking' | 'synthesizing' | 'listening';
   speakerLabel: string;
 }
@@ -32,6 +33,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenDriveModal,
   onOpenQuotaModal,
   onTogglePersonaDrawer,
+  onOpenDeviceAccessModal,
   speakerState,
   speakerLabel,
 }) => {
@@ -133,6 +135,16 @@ export const Header: React.FC<HeaderProps> = ({
         >
           <span>🧬 البيرسونا</span>
         </button>
+
+        {onOpenDeviceAccessModal && (
+          <button
+            onClick={onOpenDeviceAccessModal}
+            className="px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-blue-600/30 to-indigo-600/30 hover:from-blue-600/50 hover:to-indigo-600/50 border border-blue-400/50 text-blue-200 text-xs font-bold transition flex items-center gap-1 shadow"
+            title="الوصول والتثبيت على iPhone و Android و Windows (PWA)"
+          >
+            <span>📱 الأجهزة والتثبيت</span>
+          </button>
+        )}
 
         {/* Google Sign-in / User Profile */}
         {user ? (
